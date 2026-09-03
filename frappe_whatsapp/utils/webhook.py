@@ -295,9 +295,24 @@ def post():
 @frappe.whitelist(allow_guest=True)
 def infobip():
 	"""Infobip inbound messages and delivery reports."""
-	account = _get_infobip_account_from_key()
 	data = _get_request_json()
+	# Log the raw payload BEFORE any validation that could raise. A mismatched
+	# webhook key used to `frappe.throw` here (HTTP 417), discarding the inbound
+	# payload with no trace — that is how real messages went missing during the
+	# provider rollout. Persist first, validate second.
 	_log_webhook_payload("Infobip Webhook", data)
+
+	try:
+		account = _get_infobip_account_from_key()
+	except frappe.ValidationError as exc:
+		# Unknown/mismatched key or non-Infobip account: record it and ACK with 200
+		# so the payload stays captured for inspection instead of being dropped.
+		key = _get_infobip_webhook_key()
+		_log_webhook_payload(
+			"Infobip Webhook Unmatched",
+			{"error": str(exc), "key_present": bool(key), "key_len": len(key or "")},
+		)
+		return {"success": False, "error": "unmatched_account"}
 
 	for result in data.get("results") or []:
 		try:
@@ -414,11 +429,19 @@ def _infobip_message_text(message_type: str, message: dict) -> str:
 
 
 def _infobip_profile_name(result: dict) -> str | None:
+	"""Extract the sender's WhatsApp profile name from an Infobip inbound result.
+
+	Real Infobip inbound payloads carry the name as a plain string in
+	`contact.name` (e.g. {"contact": {"name": "Yas", "phoneNumber": ...}}). Older
+	code only handled a nested `{"name": {"formatted_name": ...}}` shape and the
+	`profileName` key, so `contact.name` as a string was dropped and every inbound
+	lead fell back to "WhatsApp +<number>". Handle all three shapes.
+	"""
 	contact = result.get("contact") or {}
-	name = contact.get("name") or {}
+	name = contact.get("name")
 	if isinstance(name, dict):
-		return name.get("formatted_name")
-	return contact.get("profileName") or contact.get("profile_name")
+		name = name.get("formatted_name")
+	return name or contact.get("profileName") or contact.get("profile_name")
 
 
 def _attach_infobip_media(message_doc, account, message: dict) -> None:

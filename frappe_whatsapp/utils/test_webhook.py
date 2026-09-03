@@ -9,6 +9,7 @@ from frappe_whatsapp.testing import IntegrationTestCase
 
 from frappe_whatsapp.utils.webhook import (
     infobip,
+    _infobip_profile_name,
     _is_allowed_infobip_media_url,
     update_message_status,
     update_status,
@@ -190,7 +191,7 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
     def tearDown(self):
         for name in frappe.get_all("WhatsApp Message", filters={"message_id": ["like", "infobip_webhook_%"]}, pluck="name"):
             frappe.delete_doc("WhatsApp Message", name, force=True)
-        for name in frappe.get_all("WhatsApp Notification Log", filters={"template": ["in", ["Infobip Webhook", "Infobip Webhook Error"]]}, pluck="name"):
+        for name in frappe.get_all("WhatsApp Notification Log", filters={"template": ["in", ["Infobip Webhook", "Infobip Webhook Error", "Infobip Webhook Unmatched"]]}, pluck="name"):
             frappe.delete_doc("WhatsApp Notification Log", name, force=True)
         for name in frappe.get_all("File", filters={"attached_to_doctype": "WhatsApp Message"}, pluck="name"):
             frappe.delete_doc("File", name, force=True)
@@ -210,7 +211,9 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
                 "receivedAt": "2026-09-03T12:00:00Z",
                 "messageId": "infobip_webhook_text_1",
                 "message": message,
-                "contact": {"profileName": "Lead Test"},
+                # Real Infobip inbound shape: profile name is a plain string in
+                # contact.name (NOT contact.profileName).
+                "contact": {"name": "Lead Test", "phoneNumber": "553199990001"},
             }],
             "messageCount": 1,
             "pendingMessageCount": 0,
@@ -219,10 +222,26 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
     def test_infobip_endpoint_exists(self):
         self.assertTrue(callable(infobip))
 
-    def test_infobip_rejects_invalid_key(self):
+    def test_infobip_unmatched_key_is_logged_not_dropped(self):
+        """A mismatched key must never drop the payload. It used to `frappe.throw`
+        (HTTP 417), silently discarding the inbound message; now the raw payload is
+        logged first and the request is ACKed as unmatched."""
+        payload = self._message_payload({"type": "TEXT", "text": "Oi sem match"})
+        payload["results"][0]["messageId"] = "infobip_webhook_unmatched_1"
         frappe.local.form_dict = frappe._dict({"key": "wrong"})
-        with self.assertRaises(frappe.ValidationError):
-            infobip()
+        mock_request = MagicMock()
+        mock_request.json = payload
+        mock_request.args = {"key": "wrong"}
+
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+            response = infobip()
+
+        self.assertEqual(response, {"success": False, "error": "unmatched_account"})
+        # Raw payload persisted BEFORE validation, so nothing is lost.
+        self.assertTrue(frappe.db.exists("WhatsApp Notification Log", {"template": "Infobip Webhook"}))
+        self.assertTrue(frappe.db.exists("WhatsApp Notification Log", {"template": "Infobip Webhook Unmatched"}))
+        # No message is created for an unmatched account.
+        self.assertFalse(frappe.db.exists("WhatsApp Message", {"message_id": "infobip_webhook_unmatched_1"}))
 
     def test_infobip_text_message_creates_incoming_message(self):
         payload = self._message_payload({"type": "TEXT", "text": "Oi CRM"})
@@ -236,6 +255,20 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
         self.assertEqual(doc.message, "Oi CRM")
         self.assertEqual(doc.content_type, "text")
         self.assertEqual(doc.whatsapp_account, self.ACCOUNT)
+        # The WhatsApp profile name must be captured so inbound leads are named
+        # after the contact instead of "WhatsApp +<number>".
+        self.assertEqual(doc.profile_name, "Lead Test")
+
+    def test_infobip_profile_name_parsing(self):
+        """`contact.name` (string) is the real Infobip shape; dict + profileName
+        are also accepted for robustness."""
+        self.assertEqual(_infobip_profile_name({"contact": {"name": "Yas"}}), "Yas")
+        self.assertEqual(
+            _infobip_profile_name({"contact": {"name": {"formatted_name": "Yas M"}}}), "Yas M"
+        )
+        self.assertEqual(_infobip_profile_name({"contact": {"profileName": "Yas P"}}), "Yas P")
+        self.assertIsNone(_infobip_profile_name({}))
+        self.assertIsNone(_infobip_profile_name({"contact": {}}))
 
     def test_infobip_json_post_reads_key_from_query_args(self):
         payload = self._message_payload({"type": "TEXT", "text": "Oi query"})
