@@ -98,11 +98,20 @@ class TestInfobipProviderSelection(InfobipPayloadTestCase):
 
 class TestInfobipFreeformPayloads(InfobipPayloadTestCase):
     def test_text_endpoint_and_envelope(self):
+        # No URL in the body: `previewUrl` must be omitted, otherwise Infobip
+        # rejects the send with 400 "content: must contain a previewable URL".
         endpoint, payload = self.capture(self.build(content_type="text", message="Olá"))
         self.assertEqual(endpoint, "text")
         self.assertEqual(payload["from"], SENDER)
         self.assertEqual(payload["to"], TO)
-        self.assertEqual(payload["content"], {"text": "Olá", "previewUrl": True})
+        self.assertEqual(payload["content"], {"text": "Olá"})
+        self.assertNotIn("previewUrl", payload["content"])
+
+    def test_text_with_url_enables_preview(self):
+        _endpoint, payload = self.capture(
+            self.build(content_type="text", message="veja https://studoflow.com.br")
+        )
+        self.assertTrue(payload["content"]["previewUrl"])
 
     def test_client_message_id_and_callback_data_are_set(self):
         _endpoint, payload = self.capture(self.build(content_type="text", message="oi"))

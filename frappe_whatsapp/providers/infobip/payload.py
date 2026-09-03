@@ -12,7 +12,19 @@ deterministic, and `callbackData` is echoed back on the report, which is how we
 find our way back to the sending account.
 """
 
+import re
+
 from frappe_whatsapp.providers.types import OutboundMessage
+
+# Infobip rejects `previewUrl: true` on a text that has no previewable URL
+# ("content: must contain a previewable URL", HTTP 400), so we only enable the
+# link preview when the body actually carries an http(s) URL.
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _has_previewable_url(text: str | None) -> bool:
+    return bool(text) and bool(_URL_RE.search(text))
+
 
 # content_type -> endpoint suffix under /whatsapp/1/message/
 MEDIA_ENDPOINTS = {
@@ -44,9 +56,10 @@ def build_freeform_payload(msg: OutboundMessage, sender: str) -> tuple[str, dict
     content_type = msg.content_type
 
     if content_type == "text":
-        return "text", _envelope(
-            msg, sender, {"text": msg.body, "previewUrl": True}
-        )
+        content = {"text": msg.body}
+        if _has_previewable_url(msg.body):
+            content["previewUrl"] = True
+        return "text", _envelope(msg, sender, content)
 
     if content_type in MEDIA_ENDPOINTS:
         content = {"mediaUrl": msg.media_url}
