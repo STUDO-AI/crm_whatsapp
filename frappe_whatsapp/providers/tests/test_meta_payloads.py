@@ -8,9 +8,9 @@ introduced. The provider refactor must keep every one of these byte-identical;
 if a fixture here needs editing, the Meta path changed and that change must be
 deliberate.
 
-Current bugs are captured on purpose (see `test_image_link_has_double_slash`),
-so that fixing one is a visible, reviewable fixture change rather than silent
-drift.
+Where a fixture asserts something that looks wrong, it is deliberate: fixing a
+bug in the send path must show up here as a reviewable fixture change rather
+than silent drift.
 """
 
 import json
@@ -177,18 +177,18 @@ class TestMetaFreeformPayloads(MetaPayloadGoldenTestCase):
         )
         self.assertNotIn("context", payload)
 
-    def test_image_link_has_double_slash(self):
-        """Captures the CURRENT (buggy) URL join: get_url() + "/" + attach.
+    def test_image_link_is_joined_without_a_double_slash(self):
+        """`attach` already starts with "/", so the site URL is joined bare.
 
-        `attach` already starts with "/", so the result contains "//". Fixing
-        this must show up here as a deliberate fixture change.
+        This asserted "//files/..." until the shared media resolver landed;
+        both send paths now agree.
         """
         payload = self.capture(
             self.build(content_type="image", message="legenda", attach="/files/pic.png")
         )
         self.assertEqual(
             payload["image"],
-            {"link": f"{self.site_url}//files/pic.png", "caption": "legenda"},
+            {"link": f"{self.site_url}/files/pic.png", "caption": "legenda"},
         )
 
     def test_image_absolute_url_passthrough(self):
@@ -207,7 +207,11 @@ class TestMetaFreeformPayloads(MetaPayloadGoldenTestCase):
         )
         self.assertEqual(payload["type"], "document")
         self.assertEqual(
-            payload["document"], {"link": f"{self.site_url}//files/c.pdf", "caption": "contrato"}
+            payload["document"],
+            {
+                "link": f"{self.site_url}/files/c.pdf",
+                "caption": "contrato",
+            },
         )
 
     def test_video(self):
@@ -215,14 +219,14 @@ class TestMetaFreeformPayloads(MetaPayloadGoldenTestCase):
             self.build(content_type="video", message="clipe", attach="/files/v.mp4")
         )
         self.assertEqual(
-            payload["video"], {"link": f"{self.site_url}//files/v.mp4", "caption": "clipe"}
+            payload["video"], {"link": f"{self.site_url}/files/v.mp4", "caption": "clipe"}
         )
 
     def test_audio_has_no_caption(self):
         payload = self.capture(
             self.build(content_type="audio", message="ignorado", attach="/files/a.ogg")
         )
-        self.assertEqual(payload["audio"], {"link": f"{self.site_url}//files/a.ogg"})
+        self.assertEqual(payload["audio"], {"link": f"{self.site_url}/files/a.ogg"})
 
     def test_reaction(self):
         payload = self.capture(

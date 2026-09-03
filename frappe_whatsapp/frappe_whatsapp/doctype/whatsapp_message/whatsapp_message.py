@@ -10,6 +10,7 @@ from frappe_whatsapp.providers.errors import (
     UnsupportedFeatureError,
     extract_integration_error,
 )
+from frappe_whatsapp.providers.media import resolve_public_media_url
 from frappe_whatsapp.providers.types import ButtonParam, FlowSpec, OutboundMessage, TemplateSpec
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
 
@@ -94,20 +95,16 @@ class WhatsAppMessage(Document):
         """Project this doc onto the provider-neutral outbound structure.
 
         Everything that reads `self` lives here; providers only ever see
-        resolved values. Media URL joining is reproduced exactly as it was
-        before the provider split, double slash included, so the Meta payload
-        is unchanged; correcting it is a separate, deliberate change.
+        resolved values.
         """
-        if self.attach and not self.attach.startswith("http"):
-            link = frappe.utils.get_url() + "/" + self.attach
-        else:
-            link = self.attach
+        link = resolve_public_media_url(self.attach, self)
 
         message = OutboundMessage(
             to=format_number(self.to),
             content_type=self.content_type,
             body=self.message,
             media_url=link,
+            media_filename=self._media_filename(),
             is_reply=bool(self.is_reply),
             reply_to_message_id=self.reply_to_message_id,
             source_doc=self.name,
@@ -125,6 +122,12 @@ class WhatsAppMessage(Document):
             message.callback_data = self.whatsapp_account
 
         return message
+
+    def _media_filename(self) -> str | None:
+        """Filename a provider should present for a document attachment."""
+        if self.content_type != "document" or not self.attach:
+            return None
+        return self.attach.split("/")[-1].split("?")[0] or "document.pdf"
 
     def _build_flow_spec(self):
         """Resolve the WhatsApp Flow referenced by this message."""
