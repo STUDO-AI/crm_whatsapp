@@ -18,9 +18,7 @@ from unittest.mock import patch
 
 import frappe
 
-from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message import (
-    WhatsAppMessage,
-)
+from frappe_whatsapp.providers.meta.provider import MetaCloudProvider
 from frappe_whatsapp.testing import IntegrationTestCase
 
 ACCOUNT = "Golden Payload Account"
@@ -129,14 +127,20 @@ class MetaPayloadGoldenTestCase(IntegrationTestCase):
         return doc
 
     def capture(self, doc, template=False):
-        """Run the send path with notify() stubbed and return the payload."""
-        with patch.object(WhatsAppMessage, "notify", autospec=True) as notify:
+        """Run the send path with the HTTP boundary stubbed; return the payload.
+
+        Stubbing `MetaCloudProvider._post` rather than the transport library
+        keeps this pinned to the last point where the payload is fully built,
+        which is exactly what these tests are about.
+        """
+        with patch.object(MetaCloudProvider, "_post", autospec=True) as post:
+            post.return_value = {"messages": [{"id": "wamid.TEST"}]}
             if template:
                 doc.send_template()
             else:
                 doc.send_outgoing()
-        self.assertEqual(notify.call_count, 1, "notify() must be called exactly once")
-        return notify.call_args[0][1]
+        self.assertEqual(post.call_count, 1, "the provider must POST exactly once")
+        return post.call_args[0][1]
 
     @property
     def site_url(self):
@@ -272,9 +276,9 @@ class TestMetaFreeformPayloads(MetaPayloadGoldenTestCase):
 
     def test_non_outgoing_is_noop(self):
         doc = self.build(type="Incoming", content_type="text", message="oi")
-        with patch.object(WhatsAppMessage, "notify", autospec=True) as notify:
+        with patch.object(MetaCloudProvider, "_post", autospec=True) as post:
             doc.send_outgoing()
-        notify.assert_not_called()
+        post.assert_not_called()
 
 
 class TestMetaTemplatePayloads(MetaPayloadGoldenTestCase):

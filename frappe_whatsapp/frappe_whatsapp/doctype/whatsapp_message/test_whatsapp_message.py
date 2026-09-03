@@ -84,7 +84,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         doc.insert(ignore_permissions=True)
         self.assertEqual(doc.whatsapp_account, "Test WA Msg Account")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_outgoing_text_message(self, mock_post):
         """Test sending an outgoing text message."""
         mock_post.return_value = {
@@ -113,7 +113,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertEqual(sent_data["type"], "text")
         self.assertEqual(sent_data["text"]["body"], "Hello from test")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_outgoing_text_message_with_plus_number(self, mock_post):
         """Test that + is stripped from phone numbers."""
         mock_post.return_value = {
@@ -134,7 +134,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
         self.assertEqual(sent_data["to"], "919900112256")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_outgoing_reply_message(self, mock_post):
         """Test sending a reply message includes context."""
         mock_post.return_value = {
@@ -158,7 +158,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertIn("context", sent_data)
         self.assertEqual(sent_data["context"]["message_id"], "wamid.original_msg_123")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_outgoing_image_message(self, mock_post):
         """Test sending an image message."""
         mock_post.return_value = {
@@ -182,7 +182,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertEqual(sent_data["image"]["link"], "https://example.com/image.jpg")
         self.assertEqual(sent_data["image"]["caption"], "Image caption")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_outgoing_reaction_message(self, mock_post):
         """Test sending a reaction message."""
         mock_post.return_value = {
@@ -256,7 +256,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertEqual(doc.format_number("+919900112233"), "919900112233")
         self.assertEqual(doc.format_number("919900112233"), "919900112233")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_send_read_receipt(self, mock_post):
         """Test sending a read receipt."""
         mock_post.return_value = {"success": True}
@@ -280,7 +280,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertEqual(sent_data["status"], "read")
         self.assertEqual(sent_data["message_id"], "wamid.test_read_receipt")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_outgoing_message_api_failure(self, mock_post):
         """Test that outgoing message handles API failure."""
         mock_post.side_effect = Exception("API Error")
@@ -301,7 +301,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
             })
             doc.insert(ignore_permissions=True)
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_send_template_whitelisted(self, mock_post):
         """Test the send_template whitelisted function."""
         mock_post.return_value = {
@@ -336,7 +336,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
             frappe.db.exists("WhatsApp Message", {"to": "919900112263", "message_type": "Template"})
         )
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_send_template_omits_static_buttons(self, mock_post):
         """Static Call Phone / Visit Website buttons must NOT appear in the
         outgoing components payload — Meta rejects sub_type=phone_number and

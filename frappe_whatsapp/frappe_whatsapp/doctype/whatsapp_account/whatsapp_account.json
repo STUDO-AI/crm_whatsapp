@@ -9,6 +9,7 @@
  "engine": "InnoDB",
  "field_order": [
   "account_name",
+  "provider",
   "status",
   "token",
   "url",
@@ -38,7 +39,8 @@
    "fieldname": "version",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Version"
+   "label": "Version",
+   "depends_on": "eval:doc.provider!=\"Infobip\""
   },
   {
    "fieldname": "phone_id",
@@ -49,12 +51,14 @@
   {
    "fieldname": "business_id",
    "fieldtype": "Data",
-   "label": "Business ID"
+   "label": "Business ID",
+   "depends_on": "eval:doc.provider!=\"Infobip\""
   },
   {
    "fieldname": "app_id",
    "fieldtype": "Data",
-   "label": "App ID"
+   "label": "App ID",
+   "depends_on": "eval:doc.provider!=\"Infobip\""
   },
   {
    "fieldname": "webhook_verify_token",
@@ -73,6 +77,16 @@
    "in_standard_filter": 1,
    "label": "Account Name",
    "unique": 1
+  },
+  {
+   "default": "Meta Cloud API",
+   "fieldname": "provider",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Provider",
+   "options": "Meta Cloud API\nInfobip",
+   "reqd": 1
   },
   {
    "default": "Inactive",
