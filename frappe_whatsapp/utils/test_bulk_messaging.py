@@ -120,7 +120,7 @@ class TestBulkMessagingUtils(IntegrationTestCase):
         self.assertIn("total", progress)
         self.assertEqual(progress["total"], 2)
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_retry_failed_util(self, mock_post):
         """Test retry_failed whitelisted function."""
         mock_post.return_value = {"messages": [{"id": "wamid.retry_util_1"}]}

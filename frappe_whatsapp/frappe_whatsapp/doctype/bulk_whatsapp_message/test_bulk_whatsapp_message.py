@@ -125,7 +125,7 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
         doc = self._make_bulk_message(title="Test Bulk Count")
         self.assertEqual(doc.recipient_count, 2)
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_on_submit_queues_messages(self, mock_post):
         """Test that submitting queues the messages."""
         mock_post.return_value = {
@@ -136,7 +136,7 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
         doc.reload()
         self.assertEqual(doc.status, "Queued")
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_create_single_message(self, mock_post):
         """Test creating a single message from bulk."""
         mock_post.return_value = {
@@ -166,7 +166,7 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
         self.assertIn("percent", progress)
         self.assertEqual(progress["total"], 2)
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_retry_failed(self, mock_post):
         """Test retry_failed enqueues each failed message for re-send."""
         doc = self._make_bulk_message(title="Test Bulk Retry")
@@ -195,7 +195,7 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
             call_kwargs = mock_enqueue.call_args.kwargs
             self.assertEqual(call_kwargs.get("message_name"), failed_msg.name)
 
-    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    @patch("frappe_whatsapp.providers.meta.provider.make_post_request")
     def test_resend_single_message(self, mock_post):
         """Test the worker entry actually re-sends and persists Success."""
         mock_post.return_value = {
