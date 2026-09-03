@@ -237,6 +237,21 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
         self.assertEqual(doc.content_type, "text")
         self.assertEqual(doc.whatsapp_account, self.ACCOUNT)
 
+    def test_infobip_json_post_reads_key_from_query_args(self):
+        payload = self._message_payload({"type": "TEXT", "text": "Oi query"})
+        payload["results"][0]["messageId"] = "infobip_webhook_query_key_1"
+        frappe.local.form_dict = frappe._dict({})
+        mock_request = MagicMock()
+        mock_request.json = payload
+        mock_request.args = {"key": self.KEY}
+
+        with patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request):
+            response = infobip()
+
+        self.assertEqual(response, {"success": True})
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_query_key_1"})
+        self.assertEqual(doc.message, "Oi query")
+
     def test_infobip_button_reply_creates_button_message(self):
         payload = self._message_payload({
             "type": "INTERACTIVE_BUTTON_REPLY",

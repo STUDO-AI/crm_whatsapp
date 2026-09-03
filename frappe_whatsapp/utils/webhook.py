@@ -324,7 +324,7 @@ def _get_request_json() -> dict:
 
 
 def _get_infobip_account_from_key():
-	key = frappe.form_dict.get("key")
+	key = _get_infobip_webhook_key()
 	if not key:
 		frappe.throw(_("Webhook key is required."))
 
@@ -340,6 +340,17 @@ def _get_infobip_account_from_key():
 	if account.meta.has_field("provider") and account.get("provider") != "Infobip":
 		frappe.throw(_("Webhook key does not belong to an Infobip account."))
 	return account
+
+
+def _get_infobip_webhook_key() -> str | None:
+	key = frappe.form_dict.get("key")
+	if key:
+		return key
+
+	args = getattr(frappe.request, "args", None)
+	if args:
+		return args.get("key")
+	return None
 
 
 def _get_infobip_account_for_result(result: dict, fallback_account):
