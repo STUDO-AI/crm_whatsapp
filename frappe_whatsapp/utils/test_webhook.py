@@ -8,6 +8,8 @@ import frappe
 from frappe_whatsapp.testing import IntegrationTestCase
 
 from frappe_whatsapp.utils.webhook import (
+    infobip,
+    _is_allowed_infobip_media_url,
     update_message_status,
     update_status,
     update_template_status,
@@ -150,6 +152,184 @@ class TestWebhookHelpers(IntegrationTestCase):
 
         status = frappe.db.get_value("WhatsApp Templates", {"id": "webhook_tmpl_id_123"}, "status")
         self.assertEqual(status, "APPROVED")
+
+
+class TestInfobipWebhookEndpoint(IntegrationTestCase):
+    """Tests for the Infobip webhook endpoint."""
+
+    ACCOUNT = "Test Infobip Webhook Account"
+    SENDER = "5511955031024"
+    KEY = "infobip_webhook_key"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not frappe.db.exists("WhatsApp Account", cls.ACCOUNT):
+            account = frappe.get_doc({
+                "doctype": "WhatsApp Account",
+                "account_name": cls.ACCOUNT,
+                "provider": "Infobip",
+                "status": "Active",
+                "url": "https://1e91zk.api.infobip.com",
+                "phone_id": cls.SENDER,
+                "webhook_verify_token": cls.KEY,
+                "is_default_incoming": 1,
+                "is_default_outgoing": 1,
+            })
+            account.insert(ignore_permissions=True)
+            from frappe.utils.password import set_encrypted_password
+            set_encrypted_password("WhatsApp Account", account.name, "infobip_test_key", "token")
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+
+    def setUp(self):
+        from frappe.utils.password import set_encrypted_password
+
+        set_encrypted_password("WhatsApp Account", self.ACCOUNT, "infobip_test_key", "token")
+        frappe.local.form_dict = frappe._dict({"key": self.KEY})
+
+    def tearDown(self):
+        for name in frappe.get_all("WhatsApp Message", filters={"message_id": ["like", "infobip_webhook_%"]}, pluck="name"):
+            frappe.delete_doc("WhatsApp Message", name, force=True)
+        for name in frappe.get_all("WhatsApp Notification Log", filters={"template": ["in", ["Infobip Webhook", "Infobip Webhook Error"]]}, pluck="name"):
+            frappe.delete_doc("WhatsApp Notification Log", name, force=True)
+        for name in frappe.get_all("File", filters={"attached_to_doctype": "WhatsApp Message"}, pluck="name"):
+            frappe.delete_doc("File", name, force=True)
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit -- clean shared test fixtures
+
+    def _set_payload(self, payload):
+        frappe.local.form_dict = frappe._dict({"key": self.KEY})
+        mock_request = MagicMock()
+        mock_request.json = payload
+        return patch("frappe_whatsapp.utils.webhook.frappe.request", mock_request)
+
+    def _message_payload(self, message):
+        return {
+            "results": [{
+                "from": "553199990001",
+                "to": self.SENDER,
+                "receivedAt": "2026-09-03T12:00:00Z",
+                "messageId": "infobip_webhook_text_1",
+                "message": message,
+                "contact": {"profileName": "Lead Test"},
+            }],
+            "messageCount": 1,
+            "pendingMessageCount": 0,
+        }
+
+    def test_infobip_endpoint_exists(self):
+        self.assertTrue(callable(infobip))
+
+    def test_infobip_rejects_invalid_key(self):
+        frappe.local.form_dict = frappe._dict({"key": "wrong"})
+        with self.assertRaises(frappe.ValidationError):
+            infobip()
+
+    def test_infobip_text_message_creates_incoming_message(self):
+        payload = self._message_payload({"type": "TEXT", "text": "Oi CRM"})
+        with self._set_payload(payload):
+            response = infobip()
+
+        self.assertEqual(response, {"success": True})
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_text_1"})
+        self.assertEqual(doc.type, "Incoming")
+        self.assertEqual(doc.get("from"), "553199990001")
+        self.assertEqual(doc.message, "Oi CRM")
+        self.assertEqual(doc.content_type, "text")
+        self.assertEqual(doc.whatsapp_account, self.ACCOUNT)
+
+    def test_infobip_button_reply_creates_button_message(self):
+        payload = self._message_payload({
+            "type": "INTERACTIVE_BUTTON_REPLY",
+            "id": "confirmar",
+            "title": "Confirmar",
+        })
+        payload["results"][0]["messageId"] = "infobip_webhook_button_1"
+
+        with self._set_payload(payload):
+            infobip()
+
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_button_1"})
+        self.assertEqual(doc.content_type, "button")
+        self.assertEqual(doc.message, "confirmar")
+
+    def test_infobip_delivery_report_updates_message_status(self):
+        msg = frappe.get_doc({
+            "doctype": "WhatsApp Message",
+            "type": "Outgoing",
+            "to": "553199990001",
+            "message": "status",
+            "message_id": "infobip_webhook_status_1",
+            "content_type": "text",
+            "whatsapp_account": self.ACCOUNT,
+            "status": "sent",
+        })
+        msg.flags.ignore_validate = True
+        msg.db_insert()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit -- status callback reads this row
+
+        payload = {
+            "results": [{
+                "messageId": "infobip_webhook_status_1",
+                "to": "553199990001",
+                "status": {"groupName": "DELIVERED"},
+            }]
+        }
+        with self._set_payload(payload):
+            infobip()
+
+        msg.reload()
+        self.assertEqual(msg.status, "delivered")
+
+    def test_infobip_media_is_downloaded_and_attached(self):
+        payload = self._message_payload({
+            "type": "IMAGE",
+            "caption": "Foto",
+            "url": "https://1e91zk.api.infobip.com/whatsapp/1/senders/5511955031024/media/abc",
+        })
+        payload["results"][0]["messageId"] = "infobip_webhook_media_1"
+        media_response = MagicMock()
+        media_response.status_code = 200
+        media_response.content = b"image-bytes"
+        media_response.headers = {"Content-Type": "image/png"}
+
+        with self._set_payload(payload), patch("frappe_whatsapp.utils.webhook.requests.get", return_value=media_response) as get:
+            infobip()
+
+        get.assert_called_once()
+        self.assertEqual(get.call_args.kwargs["headers"], {"Authorization": "App infobip_test_key"})
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_media_1"})
+        self.assertEqual(doc.content_type, "image")
+        self.assertTrue(doc.attach)
+
+    def test_infobip_blocks_media_download_to_untrusted_host(self):
+        payload = self._message_payload({
+            "type": "IMAGE",
+            "caption": "blocked",
+            "url": "https://example.com/media",
+        })
+        payload["results"][0]["messageId"] = "infobip_webhook_blocked_media_1"
+
+        with self._set_payload(payload), patch("frappe_whatsapp.utils.webhook.requests.get") as get:
+            infobip()
+
+        get.assert_not_called()
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_blocked_media_1"})
+        self.assertFalse(doc.attach)
+
+    def test_infobip_invalid_result_is_logged_without_failing_the_webhook(self):
+        payload = {"results": [{"message": "not-a-dict", "messageId": "infobip_webhook_bad_1"}]}
+        with self._set_payload(payload):
+            response = infobip()
+
+        self.assertEqual(response, {"success": True})
+        self.assertTrue(frappe.db.exists("WhatsApp Notification Log", {"template": "Infobip Webhook Error"}))
+
+    def test_infobip_media_url_allowlist(self):
+        account = frappe.get_doc("WhatsApp Account", self.ACCOUNT)
+        self.assertTrue(_is_allowed_infobip_media_url("https://1e91zk.api.infobip.com/media", account))
+        self.assertTrue(_is_allowed_infobip_media_url("https://api.infobip.com/media", account))
+        self.assertFalse(_is_allowed_infobip_media_url("http://1e91zk.api.infobip.com/media", account))
+        self.assertFalse(_is_allowed_infobip_media_url("https://evil.example/media", account))
 
 
 class TestWebhookEndpoint(IntegrationTestCase):
