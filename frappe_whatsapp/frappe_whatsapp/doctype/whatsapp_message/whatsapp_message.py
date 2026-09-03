@@ -241,11 +241,16 @@ class WhatsAppMessage(Document):
         })
 
         if template.header_type:
-            if self.attach:
-                if self.attach.startswith("http"):
-                    url = f'{self.attach}'
+            # Prefer a per-message attachment; otherwise fall back to the
+            # template's stored sample media (this is the path campaigns use,
+            # since they never set `attach`).
+            media_source = self.attach or template.sample
+            if media_source:
+                if media_source.startswith("http"):
+                    url = f'{media_source}'
                 else:
-                    url = f'{frappe.utils.get_url()}{self.attach}'
+                    url = f'{frappe.utils.get_url()}{media_source}'
+
                 if template.header_type == 'IMAGE':
                     data['template']['components'].append({
                         "type": "header",
@@ -258,29 +263,14 @@ class WhatsAppMessage(Document):
                     })
 
                 elif template.header_type == 'DOCUMENT':
+                    filename = media_source.split("/")[-1].split("?")[0] or "document.pdf"
                     data['template']['components'].append({
                         "type": "header",
                         "parameters": [{
                             "type": "document",
                             "document": {
                                 "link": url,
-                                "filename": "document.pdf"  # should be configurable
-                            }
-                        }]
-                    })
-
-            elif template.sample:
-                if template.header_type == 'IMAGE':
-                    if template.sample.startswith("http"):
-                        url = f'{template.sample}'
-                    else:
-                        url = f'{frappe.utils.get_url()}{template.sample}'
-                    data['template']['components'].append({
-                        "type": "header",
-                        "parameters": [{
-                            "type": "image",
-                            "image": {
-                                "link": url
+                                "filename": filename
                             }
                         }]
                     })
