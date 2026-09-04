@@ -12,7 +12,7 @@ from frappe.integrations.utils import make_post_request, make_request
 from frappe.desk.form.utils import get_pdf_link
 
 from frappe_whatsapp.providers import get_provider
-from frappe_whatsapp.utils import get_whatsapp_account
+from frappe_whatsapp.utils import get_whatsapp_account, sanitize_template_name
 
 class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-committing-other-method -- get_settings() sets self._token/_url/_version/_business_id/_app_id/_headers as in-memory scratch for the outbound Meta HTTP call; they are not DocType fields and must not be persisted
     """Create whatsapp template."""
@@ -141,7 +141,9 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
         # actual_name / id / status are persisted via self.db_update() below
         # after the Meta round-trip; the static check can't trace that call.
         if self.template_name:
-            self.actual_name = self.template_name.lower().replace(" ", "_")  # nosemgrep: frappe-modifying-but-not-committing
+            # WhatsApp names must be [a-z0-9_] (accents/spaces -> HTTP 400), and
+            # this is the name we later send with, so persist the sanitized form.
+            self.actual_name = sanitize_template_name(self.template_name)  # nosemgrep: frappe-modifying-but-not-committing
 
         if self._uses_provider_templates():
             try:

@@ -194,7 +194,9 @@ def build_template_create_payload(doc, header_media_url: str | None = None) -> d
 
 
 def _template_name(doc) -> str:
-    return (doc.get("actual_name") or (doc.get("template_name") or "")).lower().replace(" ", "_")
+    from frappe_whatsapp.utils import sanitize_template_name
+
+    return sanitize_template_name(doc.get("actual_name") or doc.get("template_name"))
 
 
 def _template_body(doc) -> dict:

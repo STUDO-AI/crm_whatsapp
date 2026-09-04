@@ -182,3 +182,20 @@ def format_number(number):
         number = number[1 : len(number)]
 
     return number
+
+
+def sanitize_template_name(name: str | None) -> str:
+    """Normalize a WhatsApp template name to `[a-z0-9_]`.
+
+    Both Meta and Infobip require the template name to be composed only of
+    lowercase letters, numbers and underscores (accents/spaces/punctuation are
+    rejected with HTTP 400), so strip accents and collapse anything else to `_`.
+    """
+    import re
+    import unicodedata
+
+    ascii_name = (
+        unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode("ascii")
+    )
+    slug = re.sub(r"[^a-z0-9_]+", "_", ascii_name.lower()).strip("_")
+    return slug[:512] or "template"

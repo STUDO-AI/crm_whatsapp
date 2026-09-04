@@ -46,18 +46,30 @@ def resolve_public_media_url(attach: str | None, share_doc=None) -> str | None:
             return _signed_media_url(file_name)
         # Could not locate the File row; fall through to a plain absolute URL.
 
-    return f"{frappe.utils.get_url()}{attach}"
+    # Encode the path (file names often contain spaces) so providers can fetch it.
+    return f"{_media_base_url()}{quote(attach, safe='/')}"
 
 
 # --------------------------------------------------------------------- signing
 
 
+def _media_base_url() -> str:
+    """Site base URL for provider-fetchable media, preferring https.
+
+    Providers fetch media from the public internet; handing them an http URL
+    relies on the edge redirect. Upgrade to https (except for localhost/dev).
+    """
+    base = frappe.utils.get_url().rstrip("/")
+    if base.startswith("http://") and "localhost" not in base and "127.0.0.1" not in base:
+        base = "https://" + base[len("http://") :]
+    return base
+
+
 def _signed_media_url(file_name: str) -> str:
     expires = int(frappe.utils.now_datetime().timestamp()) + _MEDIA_URL_TTL_SECONDS
     token = _media_token(file_name, expires)
-    base = frappe.utils.get_url()
     return (
-        f"{base}/api/method/{_PROXY_METHOD}"
+        f"{_media_base_url()}/api/method/{_PROXY_METHOD}"
         f"?file={quote(file_name)}&expires={expires}&token={token}"
     )
 
@@ -94,9 +106,7 @@ def download_outbound_media(file: str, expires: str, token: str):
 
     file_doc = frappe.get_doc("File", file)
     content = file_doc.get_content()
-    content_type = (
-        mimetypes.guess_type(file_doc.file_name or "")[0] or "application/octet-stream"
-    )
+    content_type = _media_content_type(file_doc.file_name or "")
 
     return Response(
         content,
@@ -106,6 +116,20 @@ def download_outbound_media(file: str, expires: str, token: str):
             "Content-Length": str(len(content)),
         },
     )
+
+
+def _media_content_type(file_name: str) -> str:
+    """Content-Type for an outbound media file.
+
+    WhatsApp accepts OGG audio ONLY with the OPUS codec — a bare `audio/ogg`
+    (what `mimetypes` returns) is rejected by the platform, which surfaces as
+    Infobip "Media hosting error" (EC 7013). We remux voice notes to OGG/OPUS,
+    so declare the codec explicitly.
+    """
+    name = (file_name or "").lower()
+    if name.endswith((".ogg", ".opus", ".oga")):
+        return "audio/ogg; codecs=opus"
+    return mimetypes.guess_type(file_name or "")[0] or "application/octet-stream"
 
 
 # ----------------------------------------------------------------- audio remux
