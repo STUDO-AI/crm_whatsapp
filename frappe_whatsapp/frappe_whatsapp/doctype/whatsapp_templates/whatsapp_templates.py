@@ -6,10 +6,12 @@ import json
 import frappe
 import magic
 import requests
+from frappe import _
 from frappe.model.document import Document
 from frappe.integrations.utils import make_post_request, make_request
 from frappe.desk.form.utils import get_pdf_link
 
+from frappe_whatsapp.providers import get_provider
 from frappe_whatsapp.utils import get_whatsapp_account
 
 class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-committing-other-method -- get_settings() sets self._token/_url/_version/_business_id/_app_id/_headers as in-memory scratch for the outbound Meta HTTP call; they are not DocType fields and must not be persisted
@@ -21,12 +23,27 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
             lang_code = frappe.db.get_value("Language", self.language) or "en"
             self.language_code = lang_code.replace("-", "_")
 
+        # Infobip accounts manage templates through the provider (create at
+        # `after_insert`, media referenced by public URL — no Meta upload dance).
+        # The Meta Graph-API path below is left untouched for Meta accounts.
+        if self._uses_provider_templates():
+            if not self.is_new():
+                get_provider(self.whatsapp_account).update_template(self)
+            return
+
         if self.header_type in ["IMAGE", "DOCUMENT"] and self.sample:
             self.get_session_id(self.sample)
             self.get_media_id(self.sample)
 
         if not self.is_new():
             self.update_template()
+
+    def _uses_provider_templates(self) -> bool:
+        """True when the account's provider owns template CRUD (Infobip)."""
+        return (
+            frappe.db.get_value("WhatsApp Account", self.whatsapp_account, "provider")
+            == "Infobip"
+        )
 
     def set_whatsapp_account(self):
         """Set whatsapp account to default if missing"""
@@ -125,6 +142,18 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
         # after the Meta round-trip; the static check can't trace that call.
         if self.template_name:
             self.actual_name = self.template_name.lower().replace(" ", "_")  # nosemgrep: frappe-modifying-but-not-committing
+
+        if self._uses_provider_templates():
+            try:
+                result = get_provider(self.whatsapp_account).create_template(self)
+            except Exception as e:
+                frappe.throw(str(e), title=_("Could not create template"))
+            if result.remote_id:
+                self.id = result.remote_id  # nosemgrep: frappe-modifying-but-not-committing
+            if result.status:
+                self.status = result.status  # nosemgrep: frappe-modifying-but-not-committing
+            self.db_update()
+            return
 
         self.get_settings()
         data = {
@@ -265,6 +294,16 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
         }
 
     def on_trash(self):
+        if self._uses_provider_templates():
+            try:
+                get_provider(self.whatsapp_account).delete_template(self)
+            except Exception as e:
+                frappe.msgprint(
+                    _("Deleted locally; could not delete on Infobip: {0}").format(str(e)),
+                    alert=True,
+                )
+            return
+
         self.get_settings()
         url = f"{self._url}/{self._version}/{self._business_id}/message_templates?name={self.actual_name}"
         try:
@@ -303,9 +342,15 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
 def fetch():
     """Fetch templates from meta."""
     """Later improve this code to pass a whatsapp account remove the js funcation so that it is called from whatsapp account doctype """
-    whatsapp_accounts = frappe.get_all('WhatsApp Account', filters={'status': 'Active'}, fields=['name', 'token', 'url', 'version', 'business_id'])
+    whatsapp_accounts = frappe.get_all('WhatsApp Account', filters={'status': 'Active'}, fields=['name', 'token', 'url', 'version', 'business_id', 'provider'])
 
     for account in whatsapp_accounts:
+        # Infobip templates come from the provider's Service Management API, not
+        # Meta's Graph API; sync those and skip the Meta path below.
+        if account.get("provider") == "Infobip":
+            _fetch_infobip_templates(account.name)
+            continue
+
         # get credentials
         token = frappe.get_doc("WhatsApp Account", account.name).get_password("token")
         url = account.url
@@ -435,3 +480,53 @@ def upsert_doc_without_hooks(doc, child_dt, child_field):
         d.parenttype = doc.doctype
         d.parentfield = child_field
         d.db_insert()
+
+
+def _fetch_infobip_templates(account_name):
+    """Upsert local WhatsApp Templates from the Infobip Service Management API."""
+    provider = get_provider(account_name)
+    for remote in provider.list_templates():
+        _upsert_local_template(account_name, remote)
+
+
+def _upsert_local_template(account_name, remote):
+    """Mirror one `RemoteTemplate` into a WhatsApp Templates doc without hooks.
+
+    Writes go through `db_insert`/`db_update` (not `save`) so syncing a template
+    never re-triggers `after_insert` -> `create_template` (which would re-create
+    it on the provider).
+    """
+    existing = frappe.db.get_value(
+        "WhatsApp Templates",
+        {"actual_name": remote.name, "whatsapp_account": account_name},
+    )
+    if existing:
+        doc = frappe.get_doc("WhatsApp Templates", existing)
+    else:
+        doc = frappe.new_doc("WhatsApp Templates")
+        doc.template_name = remote.name
+        doc.actual_name = remote.name
+        doc.whatsapp_account = account_name
+
+    doc.status = remote.status
+    doc.language_code = remote.language_code
+    if remote.category:
+        doc.category = remote.category
+    if remote.remote_id:
+        doc.id = remote.remote_id
+    if remote.body:
+        doc.template = remote.body
+    if remote.body_examples:
+        doc.sample_values = ",".join(remote.body_examples)
+    if remote.header_type:
+        doc.header_type = remote.header_type
+        if remote.header_text:
+            doc.header = remote.header_text
+    if remote.footer:
+        doc.footer = remote.footer
+
+    doc.flags.ignore_mandatory = True
+    if existing:
+        doc.db_update()
+    else:
+        doc.db_insert()

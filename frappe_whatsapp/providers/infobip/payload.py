@@ -152,3 +152,91 @@ def build_template_payload(msg: OutboundMessage, sender: str) -> tuple[str, dict
     }
 
     return "template", {"messages": [_envelope(msg, sender, content)]}
+
+
+# ------------------------------------------------------- template management (v2)
+#
+# Creating/registering a template is a different API from sending one: Infobip
+# carries the template shape in a `structure` object (header/body/footer/buttons)
+# under `POST /whatsapp/2/senders/{sender}/templates`, and takes header media as a
+# public `mediaUrl` rather than an uploaded handle (unlike Meta's resumable upload).
+
+_TEMPLATE_BUTTON_TYPE = {
+    "Quick Reply": "QUICK_REPLY",
+    "Visit Website": "URL",
+    "Call Phone": "PHONE_NUMBER",
+}
+
+
+def build_template_create_payload(doc, header_media_url: str | None = None) -> dict:
+    """Body for `POST /whatsapp/2/senders/{sender}/templates`.
+
+    `doc` is the `WhatsApp Templates` document; `header_media_url` is the already
+    resolved public URL of the sample media for an IMAGE/DOCUMENT/VIDEO header.
+    """
+    structure: dict = {"body": _template_body(doc)}
+
+    header = _template_header(doc, header_media_url)
+    if header:
+        structure["header"] = header
+    if doc.get("footer"):
+        structure["footer"] = {"text": doc.footer}
+    buttons = _template_buttons(doc)
+    if buttons:
+        structure["buttons"] = buttons
+
+    return {
+        "name": _template_name(doc),
+        "language": doc.language_code,
+        "category": doc.category,
+        "structure": structure,
+    }
+
+
+def _template_name(doc) -> str:
+    return (doc.get("actual_name") or (doc.get("template_name") or "")).lower().replace(" ", "_")
+
+
+def _template_body(doc) -> dict:
+    body: dict = {"text": doc.template}
+    examples = _template_csv(doc.get("sample_values"))
+    if examples:
+        body["examples"] = examples
+    return body
+
+
+def _template_header(doc, media_url: str | None) -> dict | None:
+    header_type = doc.get("header_type")
+    if not header_type:
+        return None
+    if header_type == "TEXT":
+        header: dict = {"format": "TEXT", "text": doc.get("header") or ""}
+        examples = [s for s in (doc.get("sample") or "").split(", ") if s]
+        if examples:
+            header["examples"] = examples
+        return header
+    header = {"format": header_type}
+    if media_url:
+        header["mediaUrl"] = media_url
+    return header
+
+
+def _template_buttons(doc) -> list[dict]:
+    buttons = []
+    for btn in doc.get("buttons") or []:
+        infobip_type = _TEMPLATE_BUTTON_TYPE.get(btn.button_type)
+        if not infobip_type:
+            continue
+        item: dict = {"type": infobip_type, "text": btn.button_label}
+        if infobip_type == "URL":
+            item["url"] = btn.website_url
+        elif infobip_type == "PHONE_NUMBER":
+            item["phoneNumber"] = btn.phone_number
+        buttons.append(item)
+    return buttons
+
+
+def _template_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]

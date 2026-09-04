@@ -300,6 +300,73 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
         self.assertEqual(doc.content_type, "button")
         self.assertEqual(doc.message, "confirmar")
 
+    def test_infobip_reply_uses_context_id(self):
+        # A genuine WhatsApp reply carries the quoted message's id in
+        # message.context.id (NOT pairedMessageId). It must be stored as a reply
+        # so the CRM can render the quoted message above the answer.
+        payload = self._message_payload({
+            "type": "TEXT",
+            "text": "Respondendo",
+            "context": {"id": "infobip_original_msg_id"},
+        })
+        payload["results"][0]["messageId"] = "infobip_webhook_reply_1"
+
+        with self._set_payload(payload):
+            infobip()
+
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_reply_1"})
+        self.assertTrue(doc.is_reply)
+        self.assertEqual(doc.reply_to_message_id, "infobip_original_msg_id")
+
+    def test_infobip_reaction_creates_reaction_message(self):
+        # A reaction must be stored as content_type "reaction" (emoji as body,
+        # pointing at the reacted message) so the CRM folds it onto that message
+        # instead of showing an "Unsupported Infobip message: REACTION" bubble.
+        payload = {
+            "results": [{
+                "from": "553199990001",
+                "to": self.SENDER,
+                "messageId": "infobip_webhook_reaction_1",
+                "message": {
+                    "type": "REACTION",
+                    "emoji": "❤️",
+                    "action": "ADDED",
+                    "context": {"id": "infobip_reacted_msg_id"},
+                },
+                "contact": {"profileName": "Lead Test"},
+            }]
+        }
+        with self._set_payload(payload):
+            response = infobip()
+
+        self.assertEqual(response, {"success": True})
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_reaction_1"})
+        self.assertEqual(doc.content_type, "reaction")
+        self.assertEqual(doc.message, "❤️")
+        self.assertEqual(doc.reply_to_message_id, "infobip_reacted_msg_id")
+        self.assertFalse(doc.is_reply)
+
+    def test_infobip_reaction_removed_clears_emoji(self):
+        payload = {
+            "results": [{
+                "from": "553199990001",
+                "to": self.SENDER,
+                "messageId": "infobip_webhook_reaction_removed_1",
+                "message": {
+                    "type": "REACTION",
+                    "emoji": "❤️",
+                    "action": "REMOVED",
+                    "context": {"id": "infobip_reacted_msg_id"},
+                },
+            }]
+        }
+        with self._set_payload(payload):
+            infobip()
+
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_reaction_removed_1"})
+        self.assertEqual(doc.content_type, "reaction")
+        self.assertEqual(doc.message or "", "")
+
     def test_infobip_delivery_report_updates_message_status(self):
         msg = frappe.get_doc({
             "doctype": "WhatsApp Message",
@@ -371,6 +438,56 @@ class TestInfobipWebhookEndpoint(IntegrationTestCase):
 
         self.assertEqual(response, {"success": True})
         self.assertTrue(frappe.db.exists("WhatsApp Notification Log", {"template": "Infobip Webhook Error"}))
+
+    def _make_outgoing(self, message_id, status="Success"):
+        msg = frappe.get_doc({
+            "doctype": "WhatsApp Message",
+            "type": "Outgoing",
+            "to": "553199990001",
+            "message": "out",
+            "message_id": message_id,
+            "content_type": "text",
+            "whatsapp_account": self.ACCOUNT,
+            "status": status,
+        })
+        msg.flags.ignore_validate = True
+        msg.db_insert()
+        frappe.db.commit()  # nosemgrep: frappe-manual-commit -- DLR handler reads this row
+        return msg
+
+    def test_infobip_delivery_report_failed_captures_reason(self):
+        self._make_outgoing("infobip_webhook_dlr_fail_1")
+        payload = {
+            "results": [{
+                "messageId": "infobip_webhook_dlr_fail_1",
+                "to": "553199990001",
+                "status": {"groupName": "UNDELIVERABLE", "name": "UNDELIVERABLE_REJECTED_OPERATOR"},
+                "error": {"id": 7013, "name": "EC_WHATSAPP_MEDIA", "description": "Media hosting error"},
+            }]
+        }
+        with self._set_payload(payload):
+            infobip()
+
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_dlr_fail_1"})
+        self.assertEqual(doc.status, "failed")
+        self.assertIn("Media hosting error", doc.error_message)
+        self.assertIn("7013", doc.error_message)
+
+    def test_infobip_delivery_report_read_clears_error(self):
+        self._make_outgoing("infobip_webhook_dlr_read_1", status="failed")
+        payload = {
+            "results": [{
+                "messageId": "infobip_webhook_dlr_read_1",
+                "to": "553199990001",
+                "status": {"groupName": "READ"},
+            }]
+        }
+        with self._set_payload(payload):
+            infobip()
+
+        doc = frappe.get_doc("WhatsApp Message", {"message_id": "infobip_webhook_dlr_read_1"})
+        self.assertEqual(doc.status, "read")
+        self.assertFalse(doc.error_message)
 
     def test_infobip_media_url_allowlist(self):
         account = frappe.get_doc("WhatsApp Account", self.ACCOUNT)

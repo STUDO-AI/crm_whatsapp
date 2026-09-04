@@ -9,6 +9,7 @@
   "label",
   "type",
   "status",
+  "error_message",
   "to",
   "from",
   "profile_name",
@@ -65,6 +66,12 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error_message",
+   "fieldtype": "Small Text",
+   "label": "Error Message",
    "read_only": 1
   },
   {
