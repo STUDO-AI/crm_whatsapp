@@ -387,6 +387,21 @@ def _insert_infobip_message(result: dict, fallback_account) -> None:
 	message_type = (message.get("type") or "").upper()
 	content_type = _infobip_content_type(message_type)
 
+	if message_type == "REACTION":
+		# A reaction points at the message it reacts to (carried in the message
+		# context, not `pairedMessageId`), and is not itself a reply. The CRM
+		# folds it onto that message's `reaction` badge.
+		reply_to = (message.get("context") or {}).get("id")
+		is_reply = False
+	else:
+		# A reply carries the quoted message's id in `message.context.id` (same
+		# place reactions point at their target), NOT `pairedMessageId` — that
+		# field is empty for genuine WhatsApp replies, which is why the CRM
+		# never rendered the quote. Fall back to `pairedMessageId` just in case.
+		context = message.get("context") or {}
+		reply_to = context.get("id") or result.get("pairedMessageId")
+		is_reply = bool(reply_to)
+
 	doc = frappe.get_doc(
 		{
 			"doctype": "WhatsApp Message",
@@ -394,8 +409,8 @@ def _insert_infobip_message(result: dict, fallback_account) -> None:
 			"from": result.get("from"),
 			"message": _infobip_message_text(message_type, message),
 			"message_id": message_id,
-			"reply_to_message_id": result.get("pairedMessageId"),
-			"is_reply": bool(result.get("pairedMessageId")),
+			"reply_to_message_id": reply_to,
+			"is_reply": is_reply,
 			"content_type": content_type,
 			"profile_name": _infobip_profile_name(result),
 			"whatsapp_account": account.name,
@@ -415,6 +430,8 @@ def _infobip_content_type(message_type: str) -> str:
 		return message_type.lower()
 	if message_type == "STICKER":
 		return "image"
+	if message_type == "REACTION":
+		return "reaction"
 	return "text"
 
 
@@ -425,6 +442,11 @@ def _infobip_message_text(message_type: str, message: dict) -> str:
 		return message.get("id") or message.get("title") or message.get("text") or ""
 	if message_type in ("IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "STICKER"):
 		return message.get("caption") or message.get("url") or ""
+	if message_type == "REACTION":
+		# An emoji reaction; a REMOVED action clears it (empty body → no badge).
+		if (message.get("action") or "").upper() == "REMOVED":
+			return ""
+		return message.get("emoji") or ""
 	return message.get("text") or message.get("caption") or f"Unsupported Infobip message: {message_type}"
 
 
@@ -529,9 +551,29 @@ def _update_infobip_message_status(result: dict) -> None:
 	if not status:
 		return
 
-	doc = frappe.get_doc("WhatsApp Message", name)
-	doc.status = status
-	doc.save(ignore_permissions=True)
+	# On a failed report, keep the reason (e.g. "Media hosting error", EC 7013) so
+	# the CRM can show WHY it failed; clear it once a message is no longer failed.
+	error_message = _infobip_status_error(result) if status == "failed" else ""
+
+	# Use db_set_value to avoid re-running the send hooks in `WhatsAppMessage.save`.
+	frappe.db.set_value(
+		"WhatsApp Message",
+		name,
+		{"status": status, "error_message": error_message},
+		update_modified=True,
+	)
+
+
+def _infobip_status_error(result: dict) -> str:
+	"""Human-readable failure reason from an Infobip delivery report."""
+	error = result.get("error") or {}
+	status = result.get("status") or {}
+	description = error.get("description") or status.get("description")
+	name = error.get("name") or status.get("name")
+	code = error.get("id")
+	parts = [p for p in (description, name) if p]
+	label = " / ".join(dict.fromkeys(parts)) or "Delivery failed"
+	return f"{label} ({code})" if code else label
 
 
 def _normalize_infobip_status(status) -> str | None:

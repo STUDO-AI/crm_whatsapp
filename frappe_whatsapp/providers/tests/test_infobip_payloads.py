@@ -254,3 +254,85 @@ class TestInfobipTemplatePayloads(InfobipPayloadTestCase):
             }
             doc.send_template()
         self.assertEqual(doc.message_id, "msg-abc")
+
+
+class TestInfobipTemplateCreatePayload(IntegrationTestCase):
+    """Unit tests for the `POST .../templates` body builder (pure function)."""
+
+    def _doc(self, **overrides):
+        doc = frappe._dict(
+            {
+                "actual_name": "nova_data",
+                "template_name": "Nova data",
+                "language_code": "pt_BR",
+                "category": "MARKETING",
+                "template": "Olá {{1}}, novidade!",
+                "sample_values": "João",
+                "header_type": None,
+                "header": None,
+                "sample": None,
+                "footer": None,
+                "buttons": [],
+            }
+        )
+        doc.update(overrides)
+        return doc
+
+    def test_minimal_text_template(self):
+        from frappe_whatsapp.providers.infobip.payload import build_template_create_payload
+
+        payload = build_template_create_payload(self._doc())
+        self.assertEqual(payload["name"], "nova_data")
+        self.assertEqual(payload["language"], "pt_BR")
+        self.assertEqual(payload["category"], "MARKETING")
+        self.assertEqual(
+            payload["structure"]["body"],
+            {"text": "Olá {{1}}, novidade!", "examples": ["João"]},
+        )
+        self.assertNotIn("header", payload["structure"])
+
+    def test_image_header_uses_media_url(self):
+        from frappe_whatsapp.providers.infobip.payload import build_template_create_payload
+
+        payload = build_template_create_payload(
+            self._doc(header_type="IMAGE", sample="/files/x.png"),
+            header_media_url="https://cdn.example.com/x.png",
+        )
+        self.assertEqual(
+            payload["structure"]["header"],
+            {"format": "IMAGE", "mediaUrl": "https://cdn.example.com/x.png"},
+        )
+
+    def test_footer_and_buttons(self):
+        from frappe_whatsapp.providers.infobip.payload import build_template_create_payload
+
+        doc = self._doc(
+            footer="Studo Flow",
+            buttons=[
+                frappe._dict({"button_type": "Quick Reply", "button_label": "Sim"}),
+                frappe._dict(
+                    {
+                        "button_type": "Visit Website",
+                        "button_label": "Abrir",
+                        "website_url": "https://studoflow.com.br",
+                    }
+                ),
+                frappe._dict(
+                    {
+                        "button_type": "Call Phone",
+                        "button_label": "Ligar",
+                        "phone_number": "+5511999999999",
+                    }
+                ),
+            ],
+        )
+        structure = build_template_create_payload(doc)["structure"]
+        self.assertEqual(structure["footer"], {"text": "Studo Flow"})
+        self.assertEqual(
+            structure["buttons"],
+            [
+                {"type": "QUICK_REPLY", "text": "Sim"},
+                {"type": "URL", "text": "Abrir", "url": "https://studoflow.com.br"},
+                {"type": "PHONE_NUMBER", "text": "Ligar", "phoneNumber": "+5511999999999"},
+            ],
+        )

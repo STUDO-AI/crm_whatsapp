@@ -10,7 +10,7 @@ from frappe_whatsapp.providers.errors import (
     UnsupportedFeatureError,
     extract_integration_error,
 )
-from frappe_whatsapp.providers.media import resolve_public_media_url
+from frappe_whatsapp.providers.media import remux_webm_file_to_ogg, resolve_public_media_url
 from frappe_whatsapp.providers.types import ButtonParam, FlowSpec, OutboundMessage, TemplateSpec
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
 
@@ -86,7 +86,10 @@ class WhatsAppMessage(Document):
                 self.message_id = result.message_id
                 self.status = "Success"
             except Exception as e:
-                self.status = "Failed"
+                # Lowercase "failed" is what the CRM inbox renders as an error
+                # state (a capitalised "Failed" would look like a normal status).
+                self.status = "failed"
+                self.error_message = str(e)
                 frappe.throw(f"Failed to send message {str(e)}")
         elif not self.message_id:
             self.send_template()
@@ -97,6 +100,7 @@ class WhatsAppMessage(Document):
         Everything that reads `self` lives here; providers only ever see
         resolved values.
         """
+        self._normalize_outbound_audio()
         link = resolve_public_media_url(self.attach, self)
 
         message = OutboundMessage(
@@ -122,6 +126,21 @@ class WhatsAppMessage(Document):
             message.callback_data = self.whatsapp_account
 
         return message
+
+    def _normalize_outbound_audio(self) -> None:
+        """Convert a browser-recorded `.webm` voice note to OGG/OPUS before send.
+
+        WhatsApp rejects `audio/webm`; the recorder emits it by default. Remux to
+        OGG in place (repointing `attach` to the converted file). On failure we
+        keep the original so the send still attempts rather than silently dropping.
+        """
+        if self.content_type != "audio" or not self.attach:
+            return
+        if not str(self.attach).lower().endswith(".webm"):
+            return
+        ogg_url = remux_webm_file_to_ogg(self.attach, self)
+        if ogg_url:
+            self.attach = ogg_url
 
     def _media_filename(self) -> str | None:
         """Filename a provider should present for a document attachment."""

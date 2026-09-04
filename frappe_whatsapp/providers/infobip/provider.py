@@ -11,19 +11,27 @@ the CRM's `is_whatsapp_enabled()` gate and provisioning keep working unchanged:
 """
 
 import json
+from urllib.parse import quote
 
 import frappe
 from frappe import _
-from frappe.integrations.utils import make_get_request, make_post_request
+from frappe.integrations.utils import make_get_request, make_post_request, make_request
 
 from frappe_whatsapp.providers import capabilities
 from frappe_whatsapp.providers.base import WhatsAppProvider
 from frappe_whatsapp.providers.errors import ProviderError, extract_integration_error
 from frappe_whatsapp.providers.infobip.payload import (
     build_freeform_payload,
+    build_template_create_payload,
     build_template_payload,
 )
-from frappe_whatsapp.providers.types import OutboundMessage, SendResult
+from frappe_whatsapp.providers.media import resolve_public_media_url
+from frappe_whatsapp.providers.types import (
+    OutboundMessage,
+    RemoteTemplate,
+    SendResult,
+    TemplateSyncResult,
+)
 
 
 class InfobipProvider(WhatsAppProvider):
@@ -128,6 +136,50 @@ class InfobipProvider(WhatsAppProvider):
             raise ProviderError(message, title) from exc
         return True
 
+    # --------------------------------------------------------------- templates
+
+    def _templates_url(self, suffix: str = "") -> str:
+        base = f"{self._base_url}/whatsapp/2/senders/{self.sender}/templates"
+        return f"{base}/{suffix}" if suffix else base
+
+    def _template_request(self, method: str, url: str, payload: dict | None = None) -> dict:
+        try:
+            if method == "GET":
+                return make_get_request(url, headers=self._headers)
+            if method == "DELETE":
+                return make_request("DELETE", url, headers=self._headers) or {}
+            return make_post_request(url, headers=self._headers, data=json.dumps(payload or {}))
+        except Exception as exc:
+            message, title = extract_integration_error(exc)
+            raise ProviderError(message, title) from exc
+
+    def create_template(self, doc) -> TemplateSyncResult:
+        media_url = None
+        if doc.get("header_type") in ("IMAGE", "DOCUMENT", "VIDEO") and doc.get("sample"):
+            media_url = resolve_public_media_url(doc.sample, doc)
+        payload = build_template_create_payload(doc, media_url)
+        response = self._template_request("POST", self._templates_url(), payload)
+        return TemplateSyncResult(
+            remote_id=response.get("id"),
+            status=response.get("status") or "PENDING",
+        )
+
+    def update_template(self, doc) -> None:
+        # Infobip has no reliable structure-edit endpoint for an already-submitted
+        # template (edits go through the Infobip portal / Meta review). No-op so a
+        # local save of an existing template does not fail. (Follow-up: real edit.)
+        return None
+
+    def delete_template(self, doc) -> None:
+        name = doc.get("actual_name") or doc.get("template_name")
+        if not name:
+            return
+        self._template_request("DELETE", self._templates_url(quote(name)))
+
+    def list_templates(self) -> list[RemoteTemplate]:
+        response = self._template_request("GET", self._templates_url())
+        return [_parse_remote_template(t) for t in (response.get("templates") or [])]
+
     # ------------------------------------------------------------- diagnostics
 
     def test_connection(self) -> dict:
@@ -144,3 +196,24 @@ class InfobipProvider(WhatsAppProvider):
             "sender": self.sender,
             "verified_name": response.get("businessName") or response.get("about"),
         }
+
+
+def _parse_remote_template(template: dict) -> RemoteTemplate:
+    """Project one Infobip template object onto the neutral `RemoteTemplate`."""
+    structure = template.get("structure") or {}
+    body = structure.get("body") or {}
+    header = structure.get("header") or {}
+    footer = structure.get("footer") or {}
+    return RemoteTemplate(
+        remote_id=template.get("id"),
+        name=template.get("name"),
+        language_code=template.get("language"),
+        status=template.get("status") or "PENDING",
+        category=template.get("category"),
+        body=body.get("text"),
+        body_examples=body.get("examples") or [],
+        header_type=header.get("format"),
+        header_text=header.get("text"),
+        footer=footer.get("text"),
+        buttons=structure.get("buttons") or [],
+    )
