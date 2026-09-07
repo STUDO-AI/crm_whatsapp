@@ -217,9 +217,13 @@ def _template_header(doc, media_url: str | None) -> dict | None:
         if examples:
             header["examples"] = examples
         return header
+    # IMAGE / DOCUMENT / VIDEO: the template header sample is `example` (a public
+    # URL string). `mediaUrl` is only for *sending* — using it here makes Infobip
+    # fail template registration with "Error occurred in communication with
+    # external provider" (confirmed against the live API).
     header = {"format": header_type}
     if media_url:
-        header["mediaUrl"] = media_url
+        header["example"] = media_url
     return header
 
 

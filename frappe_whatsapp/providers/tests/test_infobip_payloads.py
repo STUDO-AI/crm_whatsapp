@@ -291,16 +291,17 @@ class TestInfobipTemplateCreatePayload(IntegrationTestCase):
         )
         self.assertNotIn("header", payload["structure"])
 
-    def test_image_header_uses_media_url(self):
+    def test_image_header_uses_example_url(self):
         from frappe_whatsapp.providers.infobip.payload import build_template_create_payload
 
         payload = build_template_create_payload(
             self._doc(header_type="IMAGE", sample="/files/x.png"),
             header_media_url="https://cdn.example.com/x.png",
         )
+        # Template header sample is `example` (a URL), not `mediaUrl`.
         self.assertEqual(
             payload["structure"]["header"],
-            {"format": "IMAGE", "mediaUrl": "https://cdn.example.com/x.png"},
+            {"format": "IMAGE", "example": "https://cdn.example.com/x.png"},
         )
 
     def test_footer_and_buttons(self):

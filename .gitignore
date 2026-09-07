@@ -4,3 +4,11 @@
 *.swp
 tags
 node_modules
+
+#GRAPHIFY
+AGENTS.md
+CLAUDE.md
+.claude
+.codex
+
+graphify-out
