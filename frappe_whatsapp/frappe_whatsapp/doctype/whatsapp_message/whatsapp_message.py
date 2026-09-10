@@ -217,10 +217,12 @@ class WhatsAppMessage(Document):
             media_source = self.attach or template.sample
             if media_source:
                 spec.header_type = template.header_type
-                if media_source.startswith("http"):
-                    spec.header_media_url = f'{media_source}'
-                else:
-                    spec.header_media_url = f'{frappe.utils.get_url()}{media_source}'
+                # Use the shared resolver: it URL-encodes the path (file names
+                # often contain spaces, which Infobip rejects as "not a valid
+                # url"), upgrades http->https, and signs private files. Building
+                # the URL by hand here skipped all three and broke media-header
+                # template sends.
+                spec.header_media_url = resolve_public_media_url(media_source, self)
 
                 if template.header_type == 'DOCUMENT':
                     spec.header_filename = (
